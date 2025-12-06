@@ -48,13 +48,17 @@ if result["cube_found"]:
 ## 2. ROS2 订阅与外围脚本
 
 ### 2.1 文件概览
-- `read_lidar.py` / `read_coustom_msg.py`：示例 ROS2 节点，订阅 `sensor_msgs/PointCloud2` 或自定义消息，转为 `numpy` 点云。
-- `lidar_viewer.py` / `lidar_text.py`：轻量化的点云可视化与调试工具，便于在离线数据上复现算法表现。
+- `lidar_cube_detect.py`：ROS2 订阅节点，直接在回调中调用 `detect_cube_from_points()`，每 10 帧输出一次立方体中心与面心信息。
+- `lidar_viewer.py`：基于 Open3D 的实时可视化节点，用于查看 `/livox/lidar` 点云流并按强度渲染颜色。
+- `lidar_text.py`：轻量级文本打印节点，每帧展示前 10 个点，便于快速校验话题数据。
+- `read_coustom_msg.py`：订阅 Livox 自定义 `CustomMsg` 的示例，展示如何处理未转换为 PointCloud2 的原始数据。
 
 ### 2.2 使用流程
-1. **启动 ROS2 订阅节点**：根据实际雷达话题修改 `read_lidar.py` 中的话题名（如 `/livox/lidar`），运行 `python read_lidar.py` 获取实时点云。
-2. **数据桥接**：在回调中将 `PointCloud2` 转为 `numpy.ndarray`，再调用 `detect_cube_from_points()` 将结果（面心、立方体中心等）发布到新的话题或服务。
-3. **可视化/日志**：利用 `lidar_viewer.py` 或 `lidar_text.py` 检查订阅到的帧是否完整，并可把同一帧存为 `.ply` 以便后续离线分析。
+1. **选择订阅节点**：
+   - 若需要直接联调检测算法，运行 `python lidar_cube_detect.py`。
+   - 若只需查看点云或日志，分别运行 `python lidar_viewer.py` 或 `python lidar_text.py`。
+2. **配置话题与频率**：确保所有脚本中的话题名（默认 `/livox/lidar`）与实际系统一致，可根据需要调整检测间隔、可视化刷新频率等参数。
+3. **桥接到算法**：订阅节点将 `PointCloud2`/`CustomMsg` 转换为 `numpy.ndarray` 后传入 `detect_cube_from_points()`，你可以在回调里发布新的话题或服务，将面心结果输送给上层控制逻辑。
 
 ### 2.3 推荐集成方式
 - 在 ROS2 节点中提前创建 `CubeDetect` 的参数配置（如尺寸范围、聚类阈值），确保线上与离线调试保持一致。
