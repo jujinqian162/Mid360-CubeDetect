@@ -7,7 +7,9 @@ def detect_cube_from_points(points,
                             cluster_eps=0.20, 
                             cluster_min_points=30, 
                             face_distance_threshold=0.04, 
-                            min_face_points=50): 
+                            min_face_points=50,
+                            min_cube_size=0.3,
+                            max_cube_size=0.7): 
     """ 
     从点云数据中检测正方体并提取面中心 
      
@@ -18,6 +20,8 @@ def detect_cube_from_points(points,
         cluster_min_points: DBSCAN 最小点数 
         face_distance_threshold: 面分割阈值 
         min_face_points: 最小面点数 
+        min_cube_size: 立方体最小边长 (米)
+        max_cube_size: 立方体最大边长 (米)
      
     Returns: 
         dict: { 
@@ -81,6 +85,17 @@ def detect_cube_from_points(points,
             continue 
          
         temp_cloud = objects_cloud.select_by_index(cluster_indices) 
+        
+        # 检查聚类尺寸是否符合立方体大小要求
+        bbox = temp_cloud.get_axis_aligned_bounding_box()
+        bbox_extent = bbox.get_extent()
+        max_extent = max(bbox_extent)
+        min_extent = min(bbox_extent)
+        
+        # 过滤掉太小或太大的聚类
+        if max_extent < min_cube_size or max_extent > max_cube_size:
+            continue
+        
         center = temp_cloud.get_center() 
         dist = np.sqrt(center[0]**2 + center[1]**2) 
          
@@ -126,7 +141,7 @@ def detect_cube_from_points(points,
     return result 
  
  
-def extract_nearest_face(filename="scanned_cube.ply"): 
+def extract_nearest_face(filename="scanned_cube.ply", min_cube_size=0.3, max_cube_size=0.7): 
     print(f"正在读取 {filename} ...") 
      
     # 1. 读取点云 
@@ -190,6 +205,17 @@ def extract_nearest_face(filename="scanned_cube.ply"):
             continue 
              
         temp_cloud = objects_cloud.select_by_index(cluster_indices) 
+        
+        # 检查聚类尺寸是否符合立方体大小要求
+        bbox = temp_cloud.get_axis_aligned_bounding_box()
+        bbox_extent = bbox.get_extent()
+        max_extent = max(bbox_extent)
+        
+        # 过滤掉太小或太大的聚类
+        if max_extent < min_cube_size or max_extent > max_cube_size:
+            print(f"聚类 {i} 尺寸不符合 (最大边长: {max_extent:.3f}m)，跳过")
+            continue
+        
         center = temp_cloud.get_center() 
          
         # 计算质心到 Z 轴的距离 (sqrt(x^2 + y^2)) 
