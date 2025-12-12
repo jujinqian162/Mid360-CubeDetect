@@ -12,8 +12,17 @@
 `CubeDetect` 提供点云预处理、地面分割、DBSCAN 聚类、立方体尺寸筛选与平面提取等功能，可直接输出最近面的中心坐标，适合机器人抓取、姿态估计等场景。
 
 ### 1.2 目录与依赖
-- 关键脚本：`extract_face.py`（检测与可视化流程）、`gen*.py`（生成模拟点云）、`visu.py` 等。
+- 关键脚本：`extract_face.py`（V1检测）、`extract_face_v2.py`（V2检测）、`extract_face_v3.py`（V3检测，推荐）、`gen*.py`（生成模拟点云）、`visu.py` 等。
 - 依赖：Python 3.10+、[Open3D](http://www.open3d.org/)、NumPy；推荐 `pip install -e CubeDetect` 以便调试。
+
+### 1.2.1 算法版本说明
+- **V1 (`extract_face.py`)**: 基础版本，使用平面分割检测立方体面
+- **V2 (`extract_face_v2.py`)**: 改进版，增加正交面验证
+- **V3 (`extract_face_v3.py`)**: **推荐使用**，针对稀疏激光雷达优化
+  - 简化地面移除（基于高度阈值，避免误删立方体顶面）
+  - 自适应多尺度聚类（尝试多个eps值）
+  - 基于OBB的形状评估（更好地拟合任意朝向的立方体）
+  - 综合评分机制（考虑尺寸、形状、点密度、距离）
 
 ### 1.3 快速开始
 ```bash
@@ -48,7 +57,8 @@ if result["cube_found"]:
 ## 2. ROS2 订阅与外围脚本
 
 ### 2.1 文件概览
-- `lidar_cube_detect.py`：ROS2 订阅节点，直接在回调中调用 `detect_cube_from_points()`，每 10 帧输出一次立方体中心与面心信息。
+- `lidar_cube_detect.py`：ROS2 订阅节点（V2算法），直接在回调中调用 `detect_cube_v2_simple()`。
+- `lidar_cube_detect_v3.py`：**推荐使用**，ROS2 订阅节点（V3算法），使用改进的检测算法。
 - `lidar_viewer.py`：基于 Open3D 的实时可视化节点，用于查看 `/livox/lidar` 点云流并按强度渲染颜色。
 - `lidar_text.py`：轻量级文本打印节点，每帧展示前 10 个点，便于快速校验话题数据。
 - `read_coustom_msg.py`：订阅 Livox 自定义 `CustomMsg` 的示例，展示如何处理未转换为 PointCloud2 的原始数据。
