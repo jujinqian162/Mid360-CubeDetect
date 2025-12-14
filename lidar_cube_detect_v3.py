@@ -174,34 +174,47 @@ def main(args=None):
                     if result['cube_found']:
                         candidates = result['candidates']
                         
+                        # 过滤掉置信度太低的候选
+                        good_candidates = [c for c in candidates if c['confidence'] in ['HIGH', 'MEDIUM']]
+                        
                         # 定期打印检测结果
                         current_time = time.time()
                         if current_time - last_print_time > 2.0:  # 每2秒打印一次
-                            print(f"\n[Frame {frame_count}] 检测到 {len(candidates)} 个候选:")
-                            for idx, cand in enumerate(candidates[:3]):
+                            print(f"\n[Frame {frame_count}] 检测到 {len(candidates)} 个候选, {len(good_candidates)} 个有效:")
+                            for idx, cand in enumerate(candidates[:5]):
                                 center = cand['cube_center']
                                 score = cand['score']
                                 conf = cand['confidence']
                                 pts = cand['num_points']
-                                print(f"  #{idx+1}: 中心=({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}), "
-                                      f"分数={score:.1f}, 置信={conf}, 点数={pts}")
+                                ext = cand.get('extent', [0, 0, 0])
+                                marker = "★" if conf in ['HIGH', 'MEDIUM'] else " "
+                                print(f"  {marker}#{idx+1}: 中心=({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}), "
+                                      f"分数={score:.1f}, 置信={conf}, 点数={pts}, 尺寸={np.mean(ext):.2f}m")
                             last_print_time = current_time
                         
-                        # 可视化候选
-                        for idx, cand in enumerate(candidates[:3]):
+                        # 可视化：优先显示高置信度的候选
+                        display_candidates = good_candidates[:2] if good_candidates else candidates[:1]
+                        
+                        for idx, cand in enumerate(display_candidates):
                             center = np.array(cand['cube_center'])
                             extent = cand.get('extent', [0.5, 0.5, 0.5])
+                            conf = cand['confidence']
                             
-                            if idx == 0:
-                                # 最佳候选: 红色中心，绿色框
+                            if conf == 'HIGH':
+                                # 高置信度: 红色中心，亮绿色框
                                 sphere_color = [1.0, 0.0, 0.0]
                                 box_color = [0.0, 1.0, 0.0]
-                                sphere_radius = 0.08
+                                sphere_radius = 0.06
+                            elif conf == 'MEDIUM':
+                                # 中等置信度: 橙色中心，黄绿色框
+                                sphere_color = [1.0, 0.5, 0.0]
+                                box_color = [0.5, 1.0, 0.0]
+                                sphere_radius = 0.05
                             else:
-                                # 其他: 黄色中心，蓝色框
+                                # 低置信度: 黄色中心，蓝色框
                                 sphere_color = [1.0, 1.0, 0.0]
                                 box_color = [0.3, 0.3, 1.0]
-                                sphere_radius = 0.05
+                                sphere_radius = 0.04
                             
                             # 中心球
                             sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius)
@@ -215,13 +228,14 @@ def main(args=None):
                             vis.add_geometry(box, reset_bounding_box=False)
                             geometry_store.append(box)
                             
-                            # 面中心（如果有）
-                            for fc in cand.get('face_centers', [])[:2]:
-                                fc_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.03)
-                                fc_sphere.translate(np.array(fc))
-                                fc_sphere.paint_uniform_color([0.0, 0.8, 0.8])  # 青色
-                                vis.add_geometry(fc_sphere, reset_bounding_box=False)
-                                geometry_store.append(fc_sphere)
+                            # 面中心 - 只为第一个（最佳）候选显示
+                            if idx == 0:
+                                for fc in cand.get('face_centers', [])[:2]:
+                                    fc_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.025)
+                                    fc_sphere.translate(np.array(fc))
+                                    fc_sphere.paint_uniform_color([0.0, 1.0, 1.0])  # 青色
+                                    vis.add_geometry(fc_sphere, reset_bounding_box=False)
+                                    geometry_store.append(fc_sphere)
                     
                 except Exception as e:
                     print(f"检测错误: {e}")

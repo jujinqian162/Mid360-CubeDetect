@@ -279,73 +279,148 @@ class CubeDetectorV3:
         sorted_extent = np.sort(extent)
         min_dim, mid_dim, max_dim = sorted_extent
         
-        # 1. 尺寸接近目标的奖励
+        # 1. 尺寸接近目标的奖励（高斯权重）
         avg_dim = np.mean(extent)
         size_diff = abs(avg_dim - self.config.target_cube_size)
-        size_score = max(0, 50 - size_diff * 100)  # 尺寸接近0.5米奖励高
+        # 使用高斯函数，sigma=0.15，尺寸越接近目标分数越高
+        size_score = 80 * np.exp(-(size_diff ** 2) / (2 * 0.15 ** 2))
         score += size_score
         
         # 2. 立方体形状奖励（三边接近相等）
         if max_dim > 0:
-            cube_ratio = min_dim / max_dim
-            # 完美立方体ratio=1，单面ratio接近0
-            # 对于0.5-1.0的ratio给予奖励
-            if cube_ratio > 0.5:
-                score += (cube_ratio - 0.5) * 100
-            elif cube_ratio > 0.3:
-                score += 20  # 部分可见也有一定分数
+            # 计算变异系数（CV），完美立方体CV=0
+            cv = np.std(extent) / np.mean(extent)
+            # CV < 0.3 是比较好的立方体
+            if cv < 0.2:
+                score += 60  # 非常接近立方体
+            elif cv < 0.4:
+                score += 40
+            elif cv < 0.6:
+                score += 20
+            # CV > 0.6 的不给形状分
         
-        # 3. 点数奖励
+        # 3. 点数奖励（使用对数缩放）
         num_points = len(points)
-        if num_points > 100:
-            score += 50
-        elif num_points > 50:
-            score += 30
-        elif num_points > 30:
-            score += 15
+        point_score = min(50, 15 * np.log10(max(num_points, 10)))
+        score += point_score
         
-        # 4. 距离惩罚（远处的目标分数降低）
+        # 4. 距离惩罚（远处目标降低可信度）
         distance = np.linalg.norm(center)
-        score -= distance * 10
+        if distance > 2.0:
+            score -= (distance - 2.0) * 20
         
         # 5. 点云紧凑度奖励
         volume = np.prod(extent)
-        if volume > 0:
-            density = num_points / volume
-            if density > 500:  # 高密度
-                score += 30
-            elif density > 200:
-                score += 15
+        if volume > 0.001:  # 避免除零
+            density = num_points / (volume * 1000)  # 归一化
+            if density > 0.5:
+                score += 25
+            elif density > 0.2:
+                score += 10
+        
+        # 6. 额外检查：使用PCA分析点云分布
+        pca_score = self._pca_cube_score(points)
+        score += pca_score * 30
         
         return score
+    
+    def _pca_cube_score(self, points: np.ndarray) -> float:
+        """
+        使用PCA分析点云是否呈立方体分布
+        返回0-1的分数
+        """
+        if len(points) < 10:
+            return 0.0
+        
+        try:
+            # 中心化
+            centered = points - np.mean(points, axis=0)
+            # 计算协方差矩阵
+            cov = np.cov(centered.T)
+            # 特征值
+            eigenvalues = np.linalg.eigvalsh(cov)
+            eigenvalues = np.sort(eigenvalues)[::-1]  # 降序
+            
+            # 对于立方体，三个特征值应该接近相等
+            if eigenvalues[0] > 0:
+                # 计算特征值比例
+                ratio1 = eigenvalues[1] / eigenvalues[0]
+                ratio2 = eigenvalues[2] / eigenvalues[0]
+                
+                # 理想立方体: ratio1 ≈ 1, ratio2 ≈ 1
+                # 平板: ratio2 << 1
+                # 细长物体: ratio1 << 1, ratio2 << 1
+                
+                if ratio1 > 0.3 and ratio2 > 0.1:
+                    # 三维分布较均匀
+                    return min(1.0, (ratio1 + ratio2) / 2)
+                elif ratio1 > 0.5 and ratio2 > 0.05:
+                    # 可能只看到两个面
+                    return 0.5
+            
+        except Exception:
+            pass
+        
+        return 0.3  # 默认分数
     
     def _estimate_face_centers(self, points: np.ndarray, center: np.ndarray, 
                                 extent: np.ndarray) -> List[List[float]]:
         """
-        估算立方体面中心
-        
-        简化方法：沿三个主轴方向找到边界点的中心
+        使用RANSAC平面分割来精确估算可见面的中心
         """
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        
         face_centers = []
+        face_infos = []  # 存储面信息用于排序
+        temp_pcd = pcd
         
-        # 沿每个轴方向找极值点
-        for axis in range(3):
-            # 正方向
-            high_mask = points[:, axis] > center[axis]
-            if np.sum(high_mask) > 5:
-                high_points = points[high_mask]
-                fc = np.mean(high_points, axis=0)
-                face_centers.append(fc.tolist())
+        # 尝试提取最多3个平面
+        for _ in range(3):
+            if len(temp_pcd.points) < 10:
+                break
             
-            # 负方向
-            low_mask = points[:, axis] < center[axis]
-            if np.sum(low_mask) > 5:
-                low_points = points[low_mask]
-                fc = np.mean(low_points, axis=0)
-                face_centers.append(fc.tolist())
+            try:
+                plane_model, inliers = temp_pcd.segment_plane(
+                    distance_threshold=0.03,  # 更严格的阈值
+                    ransac_n=3,
+                    num_iterations=100
+                )
+                
+                if len(inliers) < 8:
+                    break
+                
+                # 获取面的点云
+                face_pcd = temp_pcd.select_by_index(inliers)
+                face_points = np.asarray(face_pcd.points)
+                
+                # 计算面中心（使用中位数更鲁棒）
+                face_center = np.median(face_points, axis=0)
+                
+                # 验证面中心是否合理（应该在点云边界附近）
+                min_pt = np.min(points, axis=0)
+                max_pt = np.max(points, axis=0)
+                
+                # 检查面中心是否在合理范围内
+                margin = 0.1  # 10cm的余量
+                if np.all(face_center >= min_pt - margin) and np.all(face_center <= max_pt + margin):
+                    face_infos.append({
+                        'center': face_center,
+                        'count': len(inliers),
+                        'normal': np.array(plane_model[:3])
+                    })
+                
+                # 移除已处理的点
+                temp_pcd = temp_pcd.select_by_index(inliers, invert=True)
+                
+            except Exception:
+                break
         
-        # 限制返回数量
-        return face_centers[:3]
+        # 按点数排序，返回最大的几个面的中心
+        face_infos.sort(key=lambda x: x['count'], reverse=True)
+        face_centers = [f['center'].tolist() for f in face_infos[:3]]
+        
+        return face_centers
     
     def _get_confidence_label(self, score: float, num_points: int, 
                               extent: np.ndarray) -> str:
@@ -353,12 +428,17 @@ class CubeDetectorV3:
         sorted_extent = np.sort(extent)
         cube_ratio = sorted_extent[0] / sorted_extent[2] if sorted_extent[2] > 0 else 0
         
-        if score > 150 and num_points > 80 and cube_ratio > 0.6:
+        # 计算变异系数
+        cv = np.std(extent) / np.mean(extent) if np.mean(extent) > 0 else 1.0
+        
+        if score > 200 and num_points > 60 and cv < 0.4:
             return "HIGH"
-        elif score > 100 and num_points > 40:
+        elif score > 150 and num_points > 30:
             return "MEDIUM"
-        else:
+        elif score > 100:
             return "LOW"
+        else:
+            return "VERY_LOW"
 
 
 def detect_cube_v3(points: np.ndarray, config: CubeDetectorConfigV3 = None) -> dict:
